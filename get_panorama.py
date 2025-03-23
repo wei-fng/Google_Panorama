@@ -28,7 +28,7 @@ class GMAP360:
         self.download_path = download_path
         self.retry = retry
         # only zoom levels from 1-5 are allowed
-        if 5 < zoom < 0:
+        if not (1 <= zoom <= 5):
             raise Exception(f"Incorrect zoom size: {zoom}, only sizes 1-5 are allowed.")
         self.zoom = zoom
         self.overwrite = overwrite
@@ -39,31 +39,52 @@ class GMAP360:
         X = Y = 0
         end_column = 0
         block_size = 512 if self.zoom <= 4 else 256
+        panorama = None 
+
         while True:
             while True:
                 if Y == end_column and Y != 0:
                     break
-                response = requests.get(f"https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile&panoid={location_id}&x={X}&y={Y}&zoom={self.zoom}&nbt=1&fover=2", headers=headers)
+                response = requests.get(
+                    f"https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile&panoid={location_id}&x={X}&y={Y}&zoom={self.zoom}&nbt=1&fover=2",
+                    headers=headers
+                )
+
                 if response.status_code == 400:
-                    end_column = Y
+                    print(f"Stopping at Y={Y} for {id} (No more tiles available)")
+                    end_column = Y 
                     break
+
                 image = Image.open(BytesIO(response.content))
-                if X == 0 and Y == 0:
+                if panorama is None: 
                     panorama = Image.new('RGB', (block_size, block_size), (250, 250, 250))
                 elif end_column == 0 and Y != 0:
                     panorama = increase_down(panorama, block_size)
+
                 panorama.paste(image, (X * block_size, Y * block_size))
                 Y += 1
                 time.sleep(0.01)
+
             Y = 0
             X += 1
-            response = requests.get(f"https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile&panoid={location_id}&x={X}&y={Y}&zoom={self.zoom}&nbt=1&fover=2", headers=headers)
+            response = requests.get(
+                f"https://streetviewpixels-pa.googleapis.com/v1/tile?cb_client=maps_sv.tactile&panoid={location_id}&x={X}&y={Y}&zoom={self.zoom}&nbt=1&fover=2",
+                headers=headers
+            )
+
             if response.status_code == 400:
+                print(f"Stopping at X={X} for {id} (No more tiles available)")
                 break
+
             image = Image.open(BytesIO(response.content))
             panorama = increase_right(panorama, block_size)
             panorama.paste(image, (X * block_size, Y * block_size))
-        panorama.save(os.path.join(self.download_path, f"{id}_{lat}_{lng}.jpg"), format="JPEG")
+
+        if panorama:
+            panorama.save(os.path.join(self.download_path, f"{id}_{lat}_{lng}.jpg"), format="JPEG")
+        else:
+            print(f"Failed to create panorama for {id}_{lat}_{lng}")
+
 
     def download(self, location_id: str, retry: int, lat: str, lng: str, id: str):
         try:
@@ -78,6 +99,10 @@ class GMAP360:
     def start(self):
         for index, street in enumerate(self.street_info):
             id, lat, lng, location_id = street
+            # Skip if pano_id is missing
+            if not location_id:
+                print(f"Skipping image {id}_{lat}_{lng} due to missing pano_id")
+                continue
             if not self.overwrite and os.path.exists(os.path.join(self.download_path, f"{id}_{lat}_{lng}.jpg")):
                 print(f"Skipping download | Image {id}_{lat}_{lng}.jpg already exists")
                 continue
